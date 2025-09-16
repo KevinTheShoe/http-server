@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include <ftw.h>
 
-// linkedlist for requestable paths
+// linkedlist utility for requestable paths
 struct StringNode {
 	char* string;
 	struct StringNode* next;
@@ -19,25 +19,22 @@ void stringListAdd(struct StringNode** head, const char* string) {
 	newStringNode->next = *head;
 	*head = newStringNode;
 }
-struct StringNode* stringListSearch(struct StringNode* head, const char* string) {
-	struct StringNode* searching = head;
+struct StringNode* stringListSearch(struct StringNode* searching, const char* string) {
 	while (searching != NULL) {
 		if (strcmp(searching->string, string) == 0) return searching;
-		searching = searching->next;
+		else searching = searching->next;
 	}
 	return NULL;
 }
+
+// ftw ftw
 struct StringNode* pathList;
 int addPath(const char* path, const struct stat* statptr, int flags) {
 	if (flags == FTW_F) stringListAdd(&pathList, path);
 	return 0;
 }
 
-void quit(char* msg, int code) {
-	puts(msg);
-	exit(code);
-}
-
+// connection thread
 void* connection(void* args) {
 	int client = (int) args;
 
@@ -47,14 +44,17 @@ void* connection(void* args) {
 	char* tmp = buffer;
 	char* method = strsep(&tmp, " ");
 	char* path = strsep(&tmp, " ");
-	char* version = strsep(&tmp, "\r");
+	char* version = strsep(&tmp, "\r\n");
 
 	// pick what to send
-	if (strcmp(version, "HTTP/1.1") != 0 && strcmp(version, "HTTP/1.0") != 0) {
-		// 505 HTTP Version Not Supported
+	if (method == NULL || path == NULL || version == NULL || *method == '\0' || *path == '\0' || *version == '\0') {
+		puts("400 Bad Request");
+	}
+	else if (strcmp(version, "HTTP/1.1") != 0 && strcmp(version, "HTTP/1.0") != 0) {
+		puts("505 HTTP Version Not Supported");
 	}
 	else if (strcmp(method, "GET") != 0) {
-		// 405 Method Not Allowed
+		puts("405 Method Not Allowed");
 	}
 	else {
 		// filepath is www + path + maybe index.html + null terminator
@@ -66,12 +66,14 @@ void* connection(void* args) {
 
 		// check that path is allowed
 		if (stringListSearch(pathList, filepath) == NULL) {
-			// 400 Not Found
-			puts("Not Found");
+			puts("404 Not Found");
 		}
 
 		// attempt to access path
 		FILE* fptr = fopen(filepath, "rb");
+
+		// no longer need this
+		free(filepath);
 
 		// send
 		char s[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 18\r\n\r\nBazingus bazongus\n";
@@ -82,6 +84,11 @@ void* connection(void* args) {
 	shutdown(client, SHUT_RDWR);
 	close(client);
 	pthread_exit(0);
+}
+
+void quit(char* msg, int code) {
+	puts(msg);
+	exit(code);
 }
 
 int main(int argc, char* argv[]) {
