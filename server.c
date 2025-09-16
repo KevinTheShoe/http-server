@@ -5,6 +5,14 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <ftw.h>
+
+char* files;
+
+int addPath(const char* path, const struct stat* statptr, int flags) {
+	if (flags == FTW_F) puts(path);
+	return 0;
+}
 
 void quit(char* msg, int code) {
 	puts(msg);
@@ -16,20 +24,26 @@ void* connection(void* args) {
 
 	// read request
 	char buffer[8192] = {0};
-	if (recv(client, buffer, sizeof(buffer) - 1, 0) > 0) {
-		char* tmp = buffer;
-		char* method = strsep(&tmp, " ");
-		char* path = strsep(&tmp, " ");
-		char* version = strsep(&tmp, "\r");
+	recv(client, buffer, sizeof(buffer) - 1, 0);
+	char* tmp = buffer;
+	char* method = strsep(&tmp, " ");
+	char* path = strsep(&tmp, " ");
+	char* version = strsep(&tmp, "\r");
 
-		puts(method);
-		puts(path);
-		puts(version);
+	// pick what to send
+	if (strcmp(version, "HTTP/1.1") != 0 && strcmp(version, "HTTP/1.0") != 0) {
+		// 505 HTTP Version Not Supported
 	}
-
-	// send
-	char s[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 18\r\n\r\nBazingus bazongus\n";
-	send(client, s, sizeof(s), 0);
+	else if (strcmp(method, "GET") != 0) {
+		// 405 Method Not Allowed
+	}
+	else {
+		// attempt to access the requested resource
+		// FILE* fptr = fopen("master.txt", "rb");
+		// send
+		char s[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 18\r\n\r\nBazingus bazongus\n";
+		send(client, s, sizeof(s), 0);
+	}
 
 	// clean up and exit
 	shutdown(client, SHUT_RDWR);
@@ -39,6 +53,9 @@ void* connection(void* args) {
 
 int main(int argc, char* argv[]) {
 	if (argc != 2) quit("Usage: ./server <port>", 0);
+
+	// find all requestable paths
+	ftw("www", addPath, 5);
 
 	// create, bind, and open listener
 	int listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
