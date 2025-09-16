@@ -72,13 +72,13 @@ void* connection(void* args) {
 	char* version = strsep(&tmp, "\r\n");
 
 	if (method == NULL || path == NULL || version == NULL || *method == '\0' || *path == '\0' || *version == '\0') {
-		puts("400 Bad Request");
+		sendResponse(client, "HTTP/1.1", "400 Bad Request", "text/html", 15, "400 Bad Request");
 	}
 	else if (strcmp(version, "HTTP/1.1") != 0 && strcmp(version, "HTTP/1.0") != 0) {
-		puts("505 HTTP Version Not Supported");
+		sendResponse(client, "HTTP/1.1", "505 HTTP Version Not Supported", "text/html", 30, "505 HTTP Version Not Supported");
 	}
 	else if (strcmp(method, "GET") != 0) {
-		puts("405 Method Not Allowed");
+		sendResponse(client, version, "405 Method Not Allowed", "text/html", 22, "405 Method Not Allowed");
 	}
 	else {
 		// filepath is www + path + maybe index.html + null terminator
@@ -89,7 +89,7 @@ void* connection(void* args) {
 		else concat(tmp, "", 1); // otherwise just append nul terminator
 
 		if (stringListSearch(pathWhitelist, filepath) == NULL) {
-			puts("404 Not Found");
+			sendResponse(client, version, "404 Not Found", "text/html", 13, "404 Not Found");
 		}
 		else {
 			// detect content-type
