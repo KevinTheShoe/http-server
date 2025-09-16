@@ -7,10 +7,29 @@
 #include <pthread.h>
 #include <ftw.h>
 
-char* files;
-
+// linkedlist for requestable paths
+struct StringNode {
+	char* string;
+	struct StringNode* next;
+};
+void stringListAdd(struct StringNode** head, const char* string) {
+	struct StringNode* newStringNode = malloc(sizeof(struct StringNode));
+	newStringNode->string = malloc(sizeof(char) * (strlen(string) + 1));
+	strcpy(newStringNode->string, string);
+	newStringNode->next = *head;
+	*head = newStringNode;
+}
+struct StringNode* stringListSearch(struct StringNode* head, const char* string) {
+	struct StringNode* searching = head;
+	while (searching != NULL) {
+		if (strcmp(searching->string, string) == 0) return searching;
+		searching = searching->next;
+	}
+	return NULL;
+}
+struct StringNode* pathList;
 int addPath(const char* path, const struct stat* statptr, int flags) {
-	if (flags == FTW_F) puts(path);
+	if (flags == FTW_F) stringListAdd(&pathList, path);
 	return 0;
 }
 
@@ -38,8 +57,22 @@ void* connection(void* args) {
 		// 405 Method Not Allowed
 	}
 	else {
-		// attempt to access the requested resource
-		// FILE* fptr = fopen("master.txt", "rb");
+		// filepath is www + path + maybe index.html + null terminator
+		size_t pathlen = strlen(path);
+		char* filepath = malloc(sizeof(char) * (3 + pathlen + 10 + 1));
+		strcpy(filepath, "www");
+		strcpy(filepath+3, path);
+		if (path[pathlen - 1] == '/') strcpy(filepath+3+pathlen, "index.html"); // check if path ends in /, if so append index.html
+
+		// check that path is allowed
+		if (stringListSearch(pathList, filepath) == NULL) {
+			// 400 Not Found
+			puts("Not Found");
+		}
+
+		// attempt to access path
+		FILE* fptr = fopen(filepath, "rb");
+
 		// send
 		char s[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 18\r\n\r\nBazingus bazongus\n";
 		send(client, s, sizeof(s), 0);
