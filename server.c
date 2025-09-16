@@ -7,7 +7,7 @@
 #include <pthread.h>
 #include <ftw.h>
 
-// linkedlist utility for requestable paths
+// linkedlist utility for path whitelist
 struct StringNode {
 	char* string;
 	struct StringNode* next;
@@ -27,10 +27,10 @@ struct StringNode* stringListSearch(struct StringNode* searching, const char* st
 	return NULL;
 }
 
-// ftw ftw
-struct StringNode* pathList;
+// ftw ftw :)
+struct StringNode* pathWhitelist;
 int addPath(const char* path, const struct stat* statptr, int flags) {
-	if (flags == FTW_F) stringListAdd(&pathList, path);
+	if (flags == FTW_F) stringListAdd(&pathWhitelist, path);
 	return 0;
 }
 
@@ -38,7 +38,6 @@ int addPath(const char* path, const struct stat* statptr, int flags) {
 void* connection(void* args) {
 	int client = (int) args;
 
-	// read request
 	char buffer[8192] = {0};
 	recv(client, buffer, sizeof(buffer) - 1, 0);
 	char* tmp = buffer;
@@ -46,7 +45,6 @@ void* connection(void* args) {
 	char* path = strsep(&tmp, " ");
 	char* version = strsep(&tmp, "\r\n");
 
-	// pick what to send
 	if (method == NULL || path == NULL || version == NULL || *method == '\0' || *path == '\0' || *version == '\0') {
 		puts("400 Bad Request");
 	}
@@ -64,20 +62,20 @@ void* connection(void* args) {
 		strcpy(filepath+3, path);
 		if (path[pathlen - 1] == '/') strcpy(filepath+3+pathlen, "index.html"); // check if path ends in /, if so append index.html
 
-		// check that path is allowed
-		if (stringListSearch(pathList, filepath) == NULL) {
+		if (stringListSearch(pathWhitelist, filepath) == NULL) {
 			puts("404 Not Found");
 		}
+		else {
+			// attempt to access path
+			FILE* fptr = fopen(filepath, "rb");
 
-		// attempt to access path
-		FILE* fptr = fopen(filepath, "rb");
+			// no longer need this
+			free(filepath);
 
-		// no longer need this
-		free(filepath);
-
-		// send
-		char s[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 18\r\n\r\nBazingus bazongus\n";
-		send(client, s, sizeof(s), 0);
+			// send
+			char s[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 18\r\n\r\nBazingus bazongus\n";
+			send(client, s, sizeof(s), 0);
+		}
 	}
 
 	// clean up and exit
@@ -94,7 +92,7 @@ void quit(char* msg, int code) {
 int main(int argc, char* argv[]) {
 	if (argc != 2) quit("Usage: ./server <port>", 0);
 
-	// find all requestable paths
+	// add only files in www to whitelist
 	ftw("www", addPath, 5);
 
 	// create, bind, and open listener
@@ -107,12 +105,10 @@ int main(int argc, char* argv[]) {
 	if (bind(listener, (struct sockaddr*)&listener_addr, sizeof(listener_addr)) < 0) quit("Error binding port", 1);
 	if (listen(listener, 100) < 0) quit("Error listening", 1);
 
+	// accept connections and spawn new thread to handle them
 	while (1) {
-		// accept connections
 		int client = accept(listener, NULL, NULL);
 		if (client < 0) puts("Error accepting connection");
-
-		// spawn a new thread to handle each connection
 		pthread_t t;
 		pthread_create(&t, NULL, connection, (void*) client);
 		pthread_detach(t);
