@@ -7,14 +7,14 @@
 #include <pthread.h>
 #include <ftw.h>
 
-// linkedlist utility for path whitelist
+// linkedlist utilities for path whitelist
 struct StringNode {
 	char* string;
 	struct StringNode* next;
 };
 void stringListAdd(struct StringNode** head, const char* string) {
 	struct StringNode* newStringNode = malloc(sizeof(struct StringNode));
-	newStringNode->string = malloc(sizeof(char) * (strlen(string) + 1));
+	newStringNode->string = malloc(strlen(string) + 1);
 	strcpy(newStringNode->string, string);
 	newStringNode->next = *head;
 	*head = newStringNode;
@@ -26,17 +26,43 @@ struct StringNode* stringListSearch(struct StringNode* searching, const char* st
 	}
 	return NULL;
 }
-
-// ftw ftw :)
 struct StringNode* pathWhitelist;
 int addPath(const char* path, const struct stat* statptr, int flags) {
 	if (flags == FTW_F) stringListAdd(&pathWhitelist, path);
 	return 0;
 }
 
+char* concat(char* dest, char* src, size_t n) { return memcpy(dest, src, n) + n; }
+
+int sendResponse(int client, char* version, char* status, char* contentType, size_t contentLen, char* content) {
+	size_t versionLen = strlen(version);
+	size_t statusLen = strlen(status);
+	size_t contentTypeLen = strlen(contentType);
+	char contentLenStr[32] = {0};
+	size_t contentLenStrLen = snprintf(contentLenStr, sizeof(contentLenStr), "%lu", contentLen); // lol
+	
+	size_t toSendLen = versionLen + 1 + statusLen + 16 + contentTypeLen + 18 + contentLenStrLen + 4 + contentLen;
+	char* toSend = malloc(toSendLen);
+
+	char* tmp = toSend;
+	tmp = concat(tmp, version, versionLen);
+	tmp = concat(tmp, " ", 1);
+	tmp = concat(tmp, status, statusLen);
+	tmp = concat(tmp, "\r\nContent-Type: ", 16);
+	tmp = concat(tmp, contentType, contentTypeLen);
+	tmp = concat(tmp, "\r\nContent-Length: ", 18);
+	tmp = concat(tmp, contentLenStr, contentLenStrLen);
+	tmp = concat(tmp, "\r\n\r\n", 4);
+	tmp = concat(tmp, content, contentLen);
+	
+	send(client, toSend, toSendLen, 0);
+
+	free(toSend);
+}
+
 // connection thread
 void* connection(void* args) {
-	int client = (int) args;
+	int client = (intptr_t) args;
 
 	char buffer[8192] = {0};
 	recv(client, buffer, sizeof(buffer) - 1, 0);
@@ -57,25 +83,33 @@ void* connection(void* args) {
 	else {
 		// filepath is www + path + maybe index.html + null terminator
 		size_t pathlen = strlen(path);
-		char* filepath = malloc(sizeof(char) * (3 + pathlen + 10 + 1));
-		strcpy(filepath, "www");
-		strcpy(filepath+3, path);
-		if (path[pathlen - 1] == '/') strcpy(filepath+3+pathlen, "index.html"); // check if path ends in /, if so append index.html
+		char* filepath = malloc(3 + pathlen + 10 + 1);
+		char* tmp = concat(concat(filepath, "www", 3), path, pathlen);
+		if (path[pathlen - 1] == '/') concat(tmp, "index.html", 11); // check if path ends in /, if so append index.html (with nul terminator)
+		else concat(tmp, "", 1); // otherwise just append nul terminator
 
 		if (stringListSearch(pathWhitelist, filepath) == NULL) {
 			puts("404 Not Found");
 		}
 		else {
-			// attempt to access path
-			FILE* fptr = fopen(filepath, "rb");
+			// detect content-type
 
-			// no longer need this
-			free(filepath);
+			// open file and find size to allocate
+			FILE* fileptr = fopen(filepath, "rb");
+			fseek(fileptr, 0, SEEK_END);
+			long filesize = ftell(fileptr);
+			rewind(fileptr);
 
-			// send
-			char s[] = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 18\r\n\r\nBazingus bazongus\n";
-			send(client, s, sizeof(s), 0);
+			// read and send
+			char* content = malloc(filesize);
+			size_t contentLen = fread(content, 1, filesize, fileptr);
+			sendResponse(client, version, "200 OK", "text/html", contentLen, content);
+
+			fclose(fileptr);
+			free(content);
 		}
+
+		free(filepath);
 	}
 
 	// clean up and exit
@@ -98,11 +132,11 @@ int main(int argc, char* argv[]) {
 	// create, bind, and open listener
 	int listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (listener < 0) quit("Error opening socket", 1);
-	struct sockaddr_in listener_addr;
-	listener_addr.sin_family = AF_INET;
-	listener_addr.sin_addr.s_addr = INADDR_ANY;
-	listener_addr.sin_port = htons(atoi(argv[1]));
-	if (bind(listener, (struct sockaddr*)&listener_addr, sizeof(listener_addr)) < 0) quit("Error binding port", 1);
+	struct sockaddr_in listenerAddr;
+	listenerAddr.sin_family = AF_INET;
+	listenerAddr.sin_addr.s_addr = INADDR_ANY;
+	listenerAddr.sin_port = htons(atoi(argv[1]));
+	if (bind(listener, (struct sockaddr*)&listenerAddr, sizeof(listenerAddr)) < 0) quit("Error binding port", 1);
 	if (listen(listener, 100) < 0) quit("Error listening", 1);
 
 	// accept connections and spawn new thread to handle them
@@ -110,7 +144,7 @@ int main(int argc, char* argv[]) {
 		int client = accept(listener, NULL, NULL);
 		if (client < 0) puts("Error accepting connection");
 		pthread_t t;
-		pthread_create(&t, NULL, connection, (void*) client);
+		pthread_create(&t, NULL, connection, (void*) (intptr_t) client);
 		pthread_detach(t);
 	}
 
