@@ -32,8 +32,16 @@ int addPath(const char* path, const struct stat* statptr, int flags) {
 	return 0;
 }
 
+// data manipulation utilities
 char* concat(char* dest, char* src, size_t n) { return memcpy(dest, src, n) + n; }
+int endsWith(char* str, char* end) {
+	size_t strLen = strlen(str);
+	size_t endLen = strlen(end);
+	if (endLen > strLen) return 0;
+	else return strcmp(str + strLen - endLen, end) == 0;
+}
 
+// utility for sending responses without fuss
 int sendResponse(int client, char* version, char* status, char* contentType, size_t contentLen, char* content) {
 	size_t versionLen = strlen(version);
 	size_t statusLen = strlen(status);
@@ -93,6 +101,16 @@ void* connection(void* args) {
 		}
 		else {
 			// detect content-type
+			char* contentType;
+			if (endsWith(filepath, ".html")) contentType = "text/html";
+			else if (endsWith(filepath, ".txt")) contentType = "text/plain";
+			else if (endsWith(filepath, ".png")) contentType = "image/png";
+			else if (endsWith(filepath, ".gif")) contentType = "image/gif";
+			else if (endsWith(filepath, ".jpg")) contentType = "image/jpg";
+			else if (endsWith(filepath, ".ico")) contentType = "image/x-icon";
+			else if (endsWith(filepath, ".css")) contentType = "text/css";
+			else if (endsWith(filepath, ".js")) contentType = "application/javascript";
+			else contentType = "application/octet-stream";
 
 			// open file and find size to allocate
 			FILE* fileptr = fopen(filepath, "rb");
@@ -103,7 +121,7 @@ void* connection(void* args) {
 			// read and send
 			char* content = malloc(filesize);
 			size_t contentLen = fread(content, 1, filesize, fileptr);
-			sendResponse(client, version, "200 OK", "text/html", contentLen, content);
+			sendResponse(client, version, "200 OK", contentType, contentLen, content);
 
 			fclose(fileptr);
 			free(content);
