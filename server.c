@@ -42,16 +42,20 @@ int endsWith(char* str, char* end) {
 }
 
 // utility for sending responses without fuss
-int sendResponse(int client, char* version, char* status, char* contentType, size_t contentLen, char* content) {
+int sendResponse(int client, char* version, char* status, char* contentType, char* connection, size_t contentLen, char* content) {
+	// find lengths of everything to include in response
 	size_t versionLen = strlen(version);
 	size_t statusLen = strlen(status);
 	size_t contentTypeLen = strlen(contentType);
+	size_t connectionLen = strlen(connection);
 	char contentLenStr[32] = {0};
 	size_t contentLenStrLen = snprintf(contentLenStr, sizeof(contentLenStr), "%lu", contentLen); // lol
 	
-	size_t toSendLen = versionLen + 1 + statusLen + 16 + contentTypeLen + 18 + contentLenStrLen + 4 + contentLen;
+	// calculate memory to allocate and allocate it
+	size_t toSendLen = versionLen + 1 + statusLen + 16 + contentTypeLen + 18 + contentLenStrLen + 14 + connectionLen + 4 + contentLen;
 	char* toSend = malloc(toSendLen);
 
+	// concat all parts of response
 	char* tmp = toSend;
 	tmp = concat(tmp, version, versionLen);
 	tmp = concat(tmp, " ", 1);
@@ -60,74 +64,108 @@ int sendResponse(int client, char* version, char* status, char* contentType, siz
 	tmp = concat(tmp, contentType, contentTypeLen);
 	tmp = concat(tmp, "\r\nContent-Length: ", 18);
 	tmp = concat(tmp, contentLenStr, contentLenStrLen);
+	tmp = concat(tmp, "\r\nConnection: ", 14);
+	tmp = concat(tmp, connection, connectionLen);
 	tmp = concat(tmp, "\r\n\r\n", 4);
 	tmp = concat(tmp, content, contentLen);
 	
+	// send it
 	send(client, toSend, toSendLen, 0);
 
+	// not forgetting to free
 	free(toSend);
 }
 
 // connection thread
 void* connection(void* args) {
+	// client passed into thread
 	int client = (intptr_t) args;
 
-	char buffer[8192] = {0};
-	recv(client, buffer, sizeof(buffer) - 1, 0);
-	char* tmp = buffer;
-	char* method = strsep(&tmp, " ");
-	char* path = strsep(&tmp, " ");
-	char* version = strsep(&tmp, "\r\n");
+	// set up timeout
+	struct timeval timeout;
+	timeout.tv_sec = 10;
+	timeout.tv_usec = 0;
+	setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
 
-	if (method == NULL || path == NULL || version == NULL || *method == '\0' || *path == '\0' || *version == '\0') {
-		sendResponse(client, "HTTP/1.1", "400 Bad Request", "text/html", 15, "400 Bad Request");
-	}
-	else if (strcmp(version, "HTTP/1.1") != 0 && strcmp(version, "HTTP/1.0") != 0) {
-		sendResponse(client, "HTTP/1.1", "505 HTTP Version Not Supported", "text/html", 30, "505 HTTP Version Not Supported");
-	}
-	else if (strcmp(method, "GET") != 0) {
-		sendResponse(client, version, "405 Method Not Allowed", "text/html", 22, "405 Method Not Allowed");
-	}
-	else {
-		// filepath is www + path + maybe index.html + null terminator
-		size_t pathlen = strlen(path);
-		char* filepath = malloc(3 + pathlen + 10 + 1);
-		char* tmp = concat(concat(filepath, "www", 3), path, pathlen);
-		if (path[pathlen - 1] == '/') concat(tmp, "index.html", 11); // check if path ends in /, if so append index.html (with nul terminator)
-		else concat(tmp, "", 1); // otherwise just append nul terminator
+	// keep things lively if requested
+	int keepAlive = 1;
+	while (keepAlive) {
+		// recieve request
+		char buffer[8192] = {0};
+		recv(client, buffer, sizeof(buffer) - 1, 0);
 
-		if (stringListSearch(pathWhitelist, filepath) == NULL) {
-			sendResponse(client, version, "404 Not Found", "text/html", 13, "404 Not Found");
+		// temporary pointer for string processing
+		char* tmp = buffer;
+		
+		// determine whether to keep alive
+		keepAlive = endsWith(tmp, "Connection: keep-alive\r\n\r\n");
+
+		// assign appropriate Connection header
+		char* conn;
+		if (keepAlive) conn = "keep-alive";
+		else conn = "close";
+
+		// parse method, path, version
+		char* method = strsep(&tmp, " ");
+		char* path = strsep(&tmp, " ");
+		char* version = strsep(&tmp, "\r\n");
+
+		// check if something's whacky about request before attempting file access
+		if (method == NULL || path == NULL || version == NULL || *method == '\0' || *path == '\0' || *version == '\0') {
+			sendResponse(client, "HTTP/1.1", "400 Bad Request", "text/html", conn, 15, "400 Bad Request");
+		}
+		else if (strcmp(version, "HTTP/1.1") != 0 && strcmp(version, "HTTP/1.0") != 0) {
+			sendResponse(client, "HTTP/1.1", "505 HTTP Version Not Supported", "text/html", conn, 30, "505 HTTP Version Not Supported");
+		}
+		else if (strcmp(method, "GET") != 0) {
+			sendResponse(client, version, "405 Method Not Allowed", "text/html", conn, 22, "405 Method Not Allowed");
 		}
 		else {
-			// detect content-type
-			char* contentType;
-			if (endsWith(filepath, ".html")) contentType = "text/html";
-			else if (endsWith(filepath, ".txt")) contentType = "text/plain";
-			else if (endsWith(filepath, ".png")) contentType = "image/png";
-			else if (endsWith(filepath, ".gif")) contentType = "image/gif";
-			else if (endsWith(filepath, ".jpg")) contentType = "image/jpg";
-			else if (endsWith(filepath, ".ico")) contentType = "image/x-icon";
-			else if (endsWith(filepath, ".css")) contentType = "text/css";
-			else if (endsWith(filepath, ".js")) contentType = "application/javascript";
-			else contentType = "application/octet-stream";
+			// filepath is www + path + maybe index.html + null terminator
+			size_t pathlen = strlen(path);
+			char* filepath = malloc(3 + pathlen + 10 + 1);
+			char* filetmp = concat(concat(filepath, "www", 3), path, pathlen);
+			// check if path ends in /, if so append index.html (with nul terminator)
+			if (path[pathlen - 1] == '/') concat(filetmp, "index.html", 11);
+			// otherwise just append nul terminator
+			else concat(filetmp, "", 1);
 
-			// open file and find size to allocate
-			FILE* fileptr = fopen(filepath, "rb");
-			fseek(fileptr, 0, SEEK_END);
-			long filesize = ftell(fileptr);
-			rewind(fileptr);
+			// if it isn't in whitelist, 404
+			if (stringListSearch(pathWhitelist, filepath) == NULL) {
+				sendResponse(client, version, "404 Not Found", "text/html", conn, 13, "404 Not Found");
+			}
+			else {
+				// detect content-type
+				char* contentType;
+				if (endsWith(filepath, ".html")) contentType = "text/html";
+				else if (endsWith(filepath, ".txt")) contentType = "text/plain";
+				else if (endsWith(filepath, ".png")) contentType = "image/png";
+				else if (endsWith(filepath, ".gif")) contentType = "image/gif";
+				else if (endsWith(filepath, ".jpg")) contentType = "image/jpg";
+				else if (endsWith(filepath, ".ico")) contentType = "image/x-icon";
+				else if (endsWith(filepath, ".css")) contentType = "text/css";
+				else if (endsWith(filepath, ".js")) contentType = "application/javascript";
+				else contentType = "application/octet-stream";
 
-			// read and send
-			char* content = malloc(filesize);
-			size_t contentLen = fread(content, 1, filesize, fileptr);
-			sendResponse(client, version, "200 OK", contentType, contentLen, content);
+				// open file and find size to allocate for contents
+				FILE* fileptr = fopen(filepath, "rb");
+				fseek(fileptr, 0, SEEK_END);
+				long filesize = ftell(fileptr);
+				rewind(fileptr);
 
-			fclose(fileptr);
-			free(content);
+				// allocate space for contents, read and send
+				char* content = malloc(filesize);
+				size_t contentLen = fread(content, 1, filesize, fileptr);
+				sendResponse(client, version, "200 OK", contentType, conn, contentLen, content);
+
+				// close file and free contents
+				fclose(fileptr);
+				free(content);
+			}
+
+			// finished with this
+			free(filepath);
 		}
-
-		free(filepath);
 	}
 
 	// clean up and exit
@@ -136,12 +174,14 @@ void* connection(void* args) {
 	pthread_exit(0);
 }
 
+// util for exiting with message
 void quit(char* msg, int code) {
 	puts(msg);
 	exit(code);
 }
 
 int main(int argc, char* argv[]) {
+	// usage info if run without port
 	if (argc != 2) quit("Usage: ./server <port>", 0);
 
 	// add only files in www to whitelist
@@ -157,7 +197,7 @@ int main(int argc, char* argv[]) {
 	if (bind(listener, (struct sockaddr*)&listenerAddr, sizeof(listenerAddr)) < 0) quit("Error binding port", 1);
 	if (listen(listener, 100) < 0) quit("Error listening", 1);
 
-	// accept connections and spawn new thread to handle them
+	// accept connections and spawn new threads to handle them
 	while (1) {
 		int client = accept(listener, NULL, NULL);
 		if (client < 0) puts("Error accepting connection");
@@ -166,6 +206,7 @@ int main(int argc, char* argv[]) {
 		pthread_detach(t);
 	}
 
+	// stop listening
 	close(listener);
 	return 0;
 }
